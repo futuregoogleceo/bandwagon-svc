@@ -1,0 +1,79 @@
+#! /usr/bin/ruby
+
+require 'base64'
+require 'json'
+require 'http/2'
+require 'socket'
+require 'openssl'
+require '/var/www/bandwagon/db.rb'
+require 'time'
+
+def send_notification(device_token, message)
+    pem = File.read('/home/ubuntu/bandwagon_push.pem')
+    tcp = TCPSocket.new('api.push.apple.com', 443)
+
+    ctx = OpenSSL::SSL::SSLContext.new(:TLSv1_2)
+    ctx.key = OpenSSL::PKey::RSA.new(pem)
+    ctx.cert = OpenSSL::X509::Certificate.new(pem)
+    ctx.verify_mode = OpenSSL::SSL::VERIFY_NONE
+
+    sock = OpenSSL::SSL::SSLSocket.new(tcp, ctx)
+    sock.sync_close = true
+    sock.hostname = 'api.push.apple.com'
+    sock.connect
+
+    conn = HTTP2::Client.new
+    conn.on(:frame) do |bytes|
+        sock.print bytes
+        sock.flush
+    end
+
+    stream = conn.new_stream
+
+    stream.on(:close) do
+        sock.close
+    end
+
+    payload = JSON.generate({ :aps => {:alert => message} })
+
+    head = {
+        ':scheme'        => 'https',
+        ':method'        => 'POST',
+        ':authority'     => 'api.push.apple.com:443',
+        ':path'          => '/3/device/' + device_token.unpack("H*").join,
+        'accept'         => '*/*',
+        'content-length' => payload.length.to_s,
+        'apns-topic'     => 'com.Fishbein.Bandwagon',
+    }
+
+    stream.headers(head, end_stream: false)
+    stream.data(payload)
+
+    while !sock.closed? && !sock.eof?
+        data = sock.read_nonblock(1024)
+
+        begin
+            conn << data
+        rescue => e
+            sock.close
+        end
+    end
+end
+
+db = BW::DB.connect()
+
+while 1
+    notifications = db.get_all('SELECT notification_id, caring_level, message, team_id FROM bw_notification WHERE status = $1', ['queued'])
+
+    notifications.each do |notification|
+        devices = db.get_all('SELECT b64_device_token FROM bw_device INNER JOIN bw_user_pref USING (user_id) WHERE caring_level >= $1 AND (team_id = $2 OR team_id IS NULL)', [notification['caring_level'].to_i, notification['team_id'].to_i])
+        devices.each do |device|
+            d_token = Base64.decode64(device['b64_device_token'])
+
+            send_notification(d_token, notification['message'])
+        end
+        db.update('bw_notification', { :status => 'sent', :sent => Time.now.iso8601(6) }, { :notification_id => notification['notification_id'] })
+    end
+    sleep 5
+end
+

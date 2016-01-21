@@ -1,0 +1,83 @@
+#! /usr/bin/ruby
+
+require 'net/http'
+require 'json'
+require 'nokogiri'
+require '/var/www/bandwagon/db.rb'
+require 'time'
+
+SUPPORTED_SPORTS = { 'nba' => 1 }
+SPORTS_SOURCE = 'http://scores.nbcsports.msnbc.com/ticker/data/sports.js.asp'
+GAMES_SOURCE  = 'http://scores.nbcsports.msnbc.com/ticker/data/gamesMSNBC.js.asp'
+
+db = BW::DB.connect()
+
+while 1
+    period = Time.now.localtime.strftime "%Y%m%d"
+    sports_json = Net::HTTP.get(URI(SPORTS_SOURCE))
+    sports_data = JSON.parse(sports_json)
+
+    available_sports = []
+
+    sports_data.each do |sport_d|
+        sport_d['sport'].downcase!
+        if SUPPORTED_SPORTS[sport_d['sport']]
+            sport_d['period'].each do |p|
+                available_sports.push(sport_d['sport']) if p['period'].eql? period
+            end
+        end
+    end
+
+    available_sports.each do |sport|
+        uri = URI(GAMES_SOURCE)
+        uri.query = URI.encode_www_form({ :sport => sport, :period => period })
+        json = Net::HTTP.get(uri)
+        games_xml = JSON.parse(json)['games']
+        games_xml.each do |game_xml|
+            game_data = Nokogiri::XML(game_xml)
+            game_id = game_data.css("ticker-entry")[0]["gamecode"]
+            res = db.get_all('SELECT data FROM bw_game_summary WHERE game_id = $1', [game_id])
+            game_prev = {}
+            game_prev = JSON.parse(res[0]['data']) if res.ntuples > 0
+
+            next if game_prev['state'].eql? 'final'
+
+            t1 = game_data.css("ticker-entry visiting-team")[0]["nickname"].downcase
+            t2 = game_data.css("ticker-entry home-team")[0]["nickname"].downcase
+            t1_score = game_data.css("ticker-entry visiting-team")[0]["score"].to_i
+            t2_score = game_data.css("ticker-entry home-team")[0]["score"].to_i
+
+            game_now = {
+                :state => game_data.css("ticker-entry gamestate")[0]["status"].downcase,
+            }
+
+            if t1_score == t2_score
+                game_now[:tie] = 1
+            else
+                game_now[:winner]  = t1_score > t2_score ? t1 : t2
+                game_now[:loser]   = t1_score > t2_score ? t2 : t1
+                game_now[:w_score] = t1_score > t2_score ? t1_score : t2_score
+                game_now[:l_score] = t1_score > t2_score ? t2_score : t1_score
+            end
+
+            res = db.get_all('SELECT event_id, parameters, message, caring_level FROM bw_event INNER JOIN bw_league USING (league_id) WHERE bw_league.name = $1', [sport])
+
+            [t1, t2].each do |team|
+                res.each do |evt|
+                    if eval(evt["parameters"])
+                        team_id = db.get_all('SELECT team_id FROM bw_team WHERE nickname = $1', [team])[0]['team_id'].to_i
+                        db.insert('bw_notification', { :game_id => game_id, :event_id => evt['event_id'].to_i, :caring_level => evt['caring_level'].to_i, :message => eval(evt["message"]), :status => 'queued', :team_id => team_id })
+                    end
+                end
+            end
+
+            if not game_prev['state'].nil?
+                db.update('bw_game_summary', { :data => JSON.generate(game_now), :updated => Time.now.iso8601(6) }, { :game_id => game_id })
+            else
+                db.insert('bw_game_summary', { :data => JSON.generate(game_now), :game_id => game_id })
+            end
+        end
+    end
+
+    sleep 30
+end

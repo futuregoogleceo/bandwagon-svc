@@ -1,9 +1,11 @@
 #! /usr/bin/ruby
 
+$LOAD_PATH.unshift('/home/ubuntu/bandwagon-svc/lib')
+
 require 'net/http'
 require 'json'
 require 'nokogiri'
-require '/var/www/bandwagon/db.rb'
+require 'BW/DB'
 require 'time'
 
 SUPPORTED_SPORTS = { 'nba' => 1 }
@@ -36,9 +38,9 @@ while 1
         games_xml.each do |game_xml|
             game_data = Nokogiri::XML(game_xml)
             game_id = game_data.css("ticker-entry")[0]["gamecode"]
-            res = db.get_all('SELECT data FROM bw_game_summary WHERE game_id = $1', [game_id])
+            game_d = db.get_1value('SELECT data FROM bw_game_summary WHERE game_id = $1', game_id)
             game_prev = {}
-            game_prev = JSON.parse(res[0]['data']) if res.ntuples > 0
+            game_prev = JSON.parse(game_d) unless game_d.nil?
 
             next if game_prev['state'].eql? 'final'
 
@@ -60,12 +62,12 @@ while 1
                 game_now[:l_score] = t1_score > t2_score ? t2_score : t1_score
             end
 
-            res = db.get_all('SELECT event_id, parameters, message, caring_level FROM bw_event INNER JOIN bw_league USING (league_id) WHERE bw_league.name = $1', [sport])
+            res = db.get_all('SELECT event_id, parameters, message, caring_level FROM bw_event INNER JOIN bw_league USING (league_id) WHERE bw_league.name = $1', sport)
 
             [t1, t2].each do |team|
                 res.each do |evt|
                     if eval(evt["parameters"])
-                        team_id = db.get_all('SELECT team_id FROM bw_team WHERE nickname = $1', [team])[0]['team_id'].to_i
+                        team_id = db.get_1value('SELECT team_id FROM bw_team WHERE nickname = $1', team).to_i
                         db.insert('bw_notification', { :game_id => game_id, :event_id => evt['event_id'].to_i, :caring_level => evt['caring_level'].to_i, :message => eval(evt["message"]), :status => 'queued', :team_id => team_id })
                     end
                 end

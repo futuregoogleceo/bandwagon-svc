@@ -1,11 +1,13 @@
 #! /usr/bin/ruby
 
+$LOAD_PATH.unshift('/home/ubuntu/bandwagon-svc/lib')
+
 require 'base64'
 require 'json'
 require 'http/2'
 require 'socket'
 require 'openssl'
-require '/var/www/bandwagon/db.rb'
+require 'BW/DB'
 require 'time'
 
 def send_notification(device_token, message)
@@ -63,10 +65,10 @@ end
 db = BW::DB.connect()
 
 while 1
-    notifications = db.get_all('SELECT notification_id, caring_level, message, team_id FROM bw_notification WHERE status = $1', ['queued'])
+    notifications = db.get_all('SELECT notification_id, caring_level, message, team_id FROM bw_notification WHERE status = $1', 'queued')
 
     notifications.each do |notification|
-        devices = db.get_all('SELECT b64_device_token FROM bw_device INNER JOIN bw_user_pref USING (user_id) WHERE caring_level >= $1 AND (team_id = $2 OR team_id IS NULL)', [notification['caring_level'].to_i, notification['team_id'].to_i])
+        devices = db.get_all('SELECT b64_device_token FROM bw_device INNER JOIN bw_user_pref USING (user_id) WHERE caring_level >= $1 AND (team_id = $2 OR team_id IS NULL)', notification['caring_level'].to_i, notification['team_id'].to_i)
         devices.each do |device|
             d_token = Base64.decode64(device['b64_device_token'])
 

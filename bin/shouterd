@@ -9,9 +9,9 @@ require 'socket'
 require 'openssl'
 require 'BW/DB'
 require 'time'
+require 'optparse'
 
-def send_notification(device_token, message)
-    pem = File.read('/home/ubuntu/bandwagon_push.pem')
+def send_notification(device_token, message, pem)
     tcp = TCPSocket.new('api.push.apple.com', 443)
 
     ctx = OpenSSL::SSL::SSLContext.new(:TLSv1_2)
@@ -62,7 +62,17 @@ def send_notification(device_token, message)
     end
 end
 
+options = {}
+OptionParser.new do |opts|
+    opts.banner = "Usage: shouterd [options]"
+
+    opts.on("-c", "--certificate CERT_FILE", "APN SSL Certificate File") do |c|
+        options[:certificate] = c
+    end
+end.parse!
+
 db = BW::DB.connect()
+pem = File.read(options[:certificate])
 
 while 1
     notifications = db.get_all('SELECT notification_id, caring_level, message, team_id FROM bw_notification WHERE status = $1', 'queued')
@@ -72,7 +82,7 @@ while 1
         devices.each do |device|
             d_token = Base64.decode64(device['b64_device_token'])
 
-            send_notification(d_token, notification['message'])
+            send_notification(d_token, notification['message'], pem)
         end
         db.update('bw_notification', { :status => 'sent', :sent => Time.now.iso8601(6) }, { :notification_id => notification['notification_id'] })
     end

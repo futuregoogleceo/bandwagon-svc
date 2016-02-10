@@ -1,6 +1,6 @@
 #! /usr/bin/ruby
 
-$LOAD_PATH.unshift('/home/ubuntu/bandwagon-svc/lib')
+$LOAD_PATH.unshift('/home/bandwagon-svc/lib')
 
 require 'base64'
 require 'json'

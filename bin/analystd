@@ -15,9 +15,12 @@ GAMES_SOURCE  = 'http://scores.nbcsports.msnbc.com/ticker/data/gamesMSNBC.js.asp
 db = BW::DB.connect()
 
 while 1
+    sleep 30 # Sleep first, so you can short circuit to the next iteration on error
+
     period = Time.now.localtime.strftime "%Y%m%d"
-    sports_json = Net::HTTP.get(URI(SPORTS_SOURCE))
-    sports_data = JSON.parse(sports_json)
+    res = Net::HTTP.get_response(URI(SPORTS_SOURCE))
+    next unless res.is_a?(Net::HTTPSuccess)
+    sports_data = JSON.parse(res.body)
 
     available_sports = []
 
@@ -33,8 +36,9 @@ while 1
     available_sports.each do |sport|
         uri = URI(GAMES_SOURCE)
         uri.query = URI.encode_www_form({ :sport => sport, :period => period })
-        json = Net::HTTP.get(uri)
-        games_xml = JSON.parse(json)['games']
+        res = Net::HTTP.get_response(uri)
+        next unless res.is_a?(Net::HTTPSuccess)
+        games_xml = JSON.parse(res.body)['games']
         games_xml.each do |game_xml|
             game_data = Nokogiri::XML(game_xml)
             game_id = game_data.css("ticker-entry")[0]["gamecode"]
@@ -80,6 +84,4 @@ while 1
             end
         end
     end
-
-    sleep 30
 end

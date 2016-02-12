@@ -12,6 +12,37 @@ SUPPORTED_SPORTS = { 'nba' => 1 }
 SPORTS_SOURCE = 'http://scores.nbcsports.msnbc.com/ticker/data/sports.js.asp'
 GAMES_SOURCE  = 'http://scores.nbcsports.msnbc.com/ticker/data/gamesMSNBC.js.asp'
 
+def is_game_cond_true?(cond, params)
+    trues = 0
+    req_trues = 1
+    req_trues = cond.length - 1 if cond[0].eql?('AND')
+
+    if cond[0].eql?('AND') or cond[0].eql?('OR')
+        1.step(cond.length - 1) do |i|
+            trues += 1 if is_game_cond_true?(cond[i], params)
+        end
+    else
+        p1 = cond[0].index(':') == 0 ? params[cond[0][1..-1]] : cond[0]
+        p2 = cond[2].index(':') == 0 ? params[cond[2][1..-1]] : cond[2]
+        case cond[1]
+        when "="
+            return p1.eql?(p2)
+        when "!="
+            return ! p1.eql?(p2)
+        when ">"
+            return p1 > p2
+        when ">="
+            return p1 >= p2
+        when "<"
+            return p1 < p2
+        when "<="
+            return p1 <= p2
+        end
+    end
+
+    return trues >= req_trues;
+end
+
 db = BW::DB.connect()
 
 while 1
@@ -68,9 +99,19 @@ while 1
 
             res = db.get_all('SELECT event_id, parameters, message, caring_level FROM bw_event INNER JOIN bw_league USING (league_id) WHERE bw_league.name = $1', sport)
 
+            game_params = {}
+            game_prev.each do |k, v|
+                game_params["prev_#{k}"] = v
+            end
+            game_now.each do |k, v|
+                game_params["curr_#{k}"] = v
+            end
+
             [t1, t2].each do |team|
+                game_params['team'] = team
                 res.each do |evt|
-                    if eval(evt["parameters"])
+                    cond = JSON.parse(evt['parameters'])
+                    if is_game_cond_true?(cond, game_params)
                         team_id = db.get_1value('SELECT team_id FROM bw_team WHERE nickname = $1', team).to_i
                         db.insert('bw_notification', { :game_id => game_id, :event_id => evt['event_id'].to_i, :caring_level => evt['caring_level'].to_i, :message => eval(evt["message"]), :status => 'queued', :team_id => team_id })
                     end
